@@ -1,285 +1,311 @@
-var CONFIG = { debug: false
-             , nick: "#"   // set in onConnect
-             , id: null    // set in onConnect
-             , last_message_time: 1
-             };
+var CONFIG = {
+    debug: false,
+    nick: "#",
+    id: null,
+    lastMessageTime: 1
+};
 
 var nicks = [];
 
-function updateUsersLink ( ) {
-  var t = nicks.length.toString() + " user";
-  if (nicks.length != 1) t += "s";
-  $("#usersLink").text(t);
-}
+var util = {
+    urlRE: /https?:\/\/([-\w\.]+)+(:\d+)?(\/([^\s]*(\?\S+)?)?)?/g, 
 
-function userJoin(nick, timestamp) {
-  addMessage(nick, "joined", timestamp, "join");
-  for (var i = 0; i < nicks.length; i++)
-    if (nicks[i] == nick) return;
-  nicks.push(nick);
-  updateUsersLink();
-}
+    toStaticHTML: function(str) {
+        str = str.replace(/&/g, '&amp;');
+        str = str.replace(/</g, '&lt;');
+        str = str.replace(/>/g, '&gt;');
+        return str;
+    }, 
 
-function userPart(nick, timestamp) {
-  addMessage(nick, "left", timestamp, "part");
-  for (var i = 0; i < nicks.length; i++) {
-    if (nicks[i] == nick) {
-      nicks.splice(i,1)
-      break;
+    timeString: function (date) {
+        var m = date.getMinutes().toString();
+        var h = date.getHours().toString();
+        return this.pad(h,2) + ':' + this.pad(m,2);
+    },
+
+    pad: function (str, len, pad, dir) {
+        var len = len + 1 - str.length;
+        if (len < 1) return str;
+        pad = new Array(len).join(pad || '0');
+        return dir ? str+pad : pad+str;
+    },
+
+    rgbPart: function (cap) {
+        return Math.floor(Math.random() * Math.min(256, cap));
+    },
+
+    rgb: function () {
+        var total = 0xFF + 0xCC;
+        var r = this.rgbPart(total);
+        var g = this.rgbPart(total - r);
+        var b = this.rgbPart(total - r - g);
+        var c = 'rgb('+r+','+g+','+b+')';
+        return c;
+    },
+    
+    randomHexColour: function () {
+        // Gives the full range, should really be tonally clamped,
+        // so we don't get anything too light or too dark, and ideally
+        // wouldn't be random so we didn't get anything too similar.
+        var val = Math.floor(Math.random() * 0x1000000);
+        var hex = '#' + this.pad(val.toString(16), 6);
+        return hex;
     }
-  }
-  updateUsersLink();
-}
-
-// utility functions
-
-util = {
-  urlRE: /https?:\/\/([-\w\.]+)+(:\d+)?(\/([^\s]*(\?\S+)?)?)?/g, 
-
-  //  html sanitizer 
-  toStaticHTML: function(inputHtml) {
-    return inputHtml.replace(/&/g, "&amp;")
-                    .replace(/</g, "&lt;")
-                    .replace(/>/g, "&gt;");
-  }, 
-
-  zeroPad: function (digits, n) {
-    n = n.toString();
-    while (n.length < digits) 
-      n = '0' + n;
-    return n;
-  },
-
-  timeString: function (date) {
-    var minutes = date.getMinutes().toString();
-    var hours = date.getHours().toString();
-    return this.zeroPad(2, hours) + ":" + this.zeroPad(2, minutes);
-  },
-
-  isBlank: function(text) {
-    var blank = /^\s*$/;
-    return (text.match(blank) !== null);
-  }
 };
 
-function scrollDown () {
-  window.scrollBy(0, 100000000000000000);
-  $("#entry").focus();
+function addContact(nick) {
+    for (var i = 0; i < nicks.length; i++) {
+        if (nicks[i].name == nick) return;
+    }
+    nicks.push({ name:nick, colour:util.rgb() });
 }
 
-function addMessage (from, text, time, _class) {
-  if (text === null)
-    return;
-
-  if (time == null) {
-    // if the time is null or undefined, use the current time.
-    time = new Date();
-  } else if ((time instanceof Date) === false) {
-    // if it's a timestamp, interpret it
-    time = new Date(time);
-  }
-
-  var messageElement = $(document.createElement("table"));
-
-  messageElement.addClass("message");
-  if (_class)
-    messageElement.addClass(_class);
-
-  // sanitize
-  text = util.toStaticHTML(text);
-
-  // See if it matches our nick?
-  var nick_re = new RegExp(CONFIG.nick);
-  if (nick_re.exec(text))
-    messageElement.addClass("personal");
-
-  // replace URLs with links
-  text = text.replace(util.urlRE, '<a target="_blank" href="$&">$&</a>');
-
-  var content = '<tr>'
-              + '  <td class="date">' + util.timeString(time) + '</td>'
-              + '  <td class="nick">' + util.toStaticHTML(from) + '</td>'
-              + '  <td class="msg-text">' + text  + '</td>'
-              + '</tr>'
-              ;
-  messageElement.html(content);
-
-  $("#log").append(messageElement);
-  scrollDown();
+function addContacts(nicks) {
+    for (var i = 0; i < nicks.length; i++) {
+        addContact(nicks[i]);
+    }
 }
 
-var transmission_errors = 0;
-var first_poll = true;
-
-function longPoll (data) {
-  if (transmission_errors > 2) {
-    showConnect();
-    return;
-  }
-
-  if (data && data.messages) {
-    for (var i = 0; i < data.messages.length; i++) {
-      var message = data.messages[i];
-
-      if (message.timestamp > CONFIG.last_message_time)
-        CONFIG.last_message_time = message.timestamp;
-
-      switch (message.type) {
-        case "msg":
-          addMessage(message.nick, message.text, message.timestamp);
-          break;
-
-        case "join":
-          userJoin(message.nick, message.timestamp);
-          break;
-
-        case "part":
-          userPart(message.nick, message.timestamp);
-          break;
-      }
+function removeContact(nick) {
+    for (var i = 0; i < nicks.length; i++) {
+        if (nicks[i].name == nick) {
+            nicks.splice(i,1);
+            break;
+        }
     }
-    if (first_poll) {
-      first_poll = false;
-      who();
-    }
-  }
+}
 
-  $.ajax({ cache: false
-         , type: "GET"
-         , url: "/recv"
-         , dataType: "json"
-         , data: { since: CONFIG.last_message_time, id: CONFIG.id }
-         , error: function () {
-             addMessage("", "long poll error. trying again...", new Date(), "error");
-             transmission_errors += 1;
-             setTimeout(longPoll, 10*1000);
-           }
-         , success: function (data) {
-             transmission_errors = 0;
-             longPoll(data);
-           }
-         });
+function getContactByNick(nick) {
+    for (var i = 0; i < nicks.length; i++) {
+        if (nicks[i].name == nick) {
+            return nicks[i];
+        }
+    }
+}
+
+function updateContacts() {
+    var items = $.map(nicks, function(nick){
+        var you = (nick.name == CONFIG.nick) ? ' <small>(you)</small>' : '';
+        return '<li><span style="color:' + nick.colour + ';">' + nick.name + you + '</span></li>';
+    });
+    $('#contacts ul').html(items.join("\n"));
+}
+
+function userJoined(nick, timestamp) {
+    addContact(nick);
+    updateContacts();
+    addMessage(nick, "joined", timestamp, "notice");
+}
+
+function userExited(nick, timestamp) {
+    removeContact(nick);
+    updateContacts();
+    addMessage(nick, "left", timestamp, "notice");
+}
+
+
+function addMessage(from, text, time, className) {
+    if (text == null) return;
+
+    if (time == null) {
+        // if the time is null or undefined, use the current time.
+        time = new Date();
+    } else if ((time instanceof Date) === false) {
+        // if it's a timestamp, interpret it
+        time = new Date(time);
+    }
+
+    if (from == 'System') {
+        className = 'error';
+    }
+    
+    var contact = getContactByNick(from);
+    var fromCss = (contact && className != 'notice') ? 'color:' + contact.colour + ';' : '';
+
+    // stringify, htmlify & linkify
+    text = new Object(text).toString();
+    text = util.toStaticHTML(text);
+    text = text.replace(util.urlRE, '<a target="_blank" href="$&">$&</a>');
+
+    var mesg = $('\
+        <table class="message">\
+            <tr>\
+                <td class="date">' + util.timeString(time) + '</td>\
+                <td class="nick"><span style="' + fromCss + '">' + from + ':</span></td>\
+                <td class="msg-text">' + text + '</td>\
+            </tr>\
+        </table>\
+    ');
+
+    if (className) {
+        mesg.addClass(className);
+    }
+    if (text.indexOf(CONFIG.nick) > -1) {
+        mesg.addClass("personal");
+    }
+
+    $('#messages .ui-panel').append(mesg);
+    
+    scrollDown();
 }
 
 function send(msg) {
-  if (CONFIG.debug === false) {
-    // XXX should be POST
-    jQuery.get("/send", {id: CONFIG.id, text: msg}, function (data) { }, "json");
-  }
+    if (CONFIG.debug === false) {
+        req("/send", { id:CONFIG.id, text:msg });
+    }
 }
 
-function showConnect () {
-  $("#connect").show();
-  $("#loading").hide();
-  $("#toolbar").hide();
-  $("#nickInput").focus();
+function onConnect(session) {
+    if (session.error) {
+        retry("Error connecting: " + session.error);
+        return;
+    }
+
+    CONFIG.nick = session.nick;
+    CONFIG.id = session.id;
 }
 
-function showLoad () {
-  $("#connect").hide();
-  $("#loading").show();
-  $("#toolbar").hide();
+function who() {
+    req('/who', {}, function(data,status) {
+        if (status == 'success') {
+            addContacts(data.nicks);
+            updateContacts();
+        }
+    });
 }
 
-function showChat (nick) {
-  $("#toolbar").show();
-  $("#entry").focus();
+function validateNick(nick) {
+    var errors = [];
 
-  $("#connect").hide();
-  $("#loading").hide();
+    if (nick.length > 50) {
+        errors.push("Nick too long. 50 character max.");
+    }
+    if (/[^\w_\-^!]/.exec(nick)) {
+        errors.push("Bad character in nick. Can only have letters, numbers, and '_', '-', '^', '!'");
+    }
 
-  scrollDown();
+    if (errors.length) {
+        return errors.join("\n");
+    } else {
+        return false; 
+    }
 }
 
-function onConnect (session) {
-  if (session.error) {
-    alert("error connecting: " + session.error);
-    showConnect();
-    return;
-  }
+var pollingErrors = 0;
 
-  CONFIG.nick = session.nick;
-  CONFIG.id   = session.id;
+function polling(data) {
+    if (pollingErrors > 2) {
+        connect();
+        return;
+    }
 
-  showChat(CONFIG.nick);
+    if (data && data.messages) {
+        for (var i = 0; i < data.messages.length; i++) {
+            var message = data.messages[i];
+
+            if (message.timestamp > CONFIG.lastMessageTime) {
+                CONFIG.lastMessageTime = message.timestamp;
+            }
+
+            switch (message.type) {
+                case "msg":
+                    addMessage(message.nick, message.text, message.timestamp);
+                    break;
+                case "join":
+                    userJoined(message.nick, message.timestamp);
+                    break;
+                case "part":
+                    userExited(message.nick, message.timestamp);
+                    break;
+            }
+        }
+    }
+
+    req('/recv', { since:CONFIG.lastMessageTime, id:CONFIG.id }, function(data) {
+            pollingErrors = 0;
+            polling(data);
+        }, function() {
+            pollingErrors += 1;
+            addMessage('System', "Polling error. Trying again...");
+            setTimeout(polling, 10*1000);
+        }
+     );
 }
 
-function outputUsers () {
-  var nick_string = nicks.length > 0 ? nicks.join(", ") : "(none)";
-  addMessage("users:", nick_string, new Date(), "notice");
-  return false;
+function connect() {
+    // var nick = prompt("Enter a nickname:");
+    var nick = "Guest_" + (new Date()).getTime().toString(36).toUpperCase();
+    var error = validateNick(nick);
+    if (error) return retry(error);
+
+    req('/join', { nick: nick }, onConnect, function(){
+        retry("Couldn't connect. Trying again...");
+    });
 }
 
-function who () {
-  jQuery.get("/who", {}, function (data, status) {
-    if (status != "success") return;
-    nicks = data.nicks;
-    outputUsers();
-  }, "json");
+function retry(error) {
+    if (error) {
+        addMessage('System', error);
+    }
+    setTimeout(connect, 10*1000);
+}
+
+function req(url, data, successFn, failureFn) {
+    var o = {
+        cache: false,
+        type: 'GET', // should be POST
+        dataType: 'json',
+        url: url
+    }
+
+    if (data) o.data = data;
+    if (successFn) o.success = successFn;
+    if (failureFn) o.error = failureFn;
+
+    $.ajax(o);
+}
+
+function fixPanelHeight() {
+    var outerA = $('#messages');
+    var innerA = outerA.find('.ui-panel');
+    var innerB = $('#contacts .ui-panel');
+
+    innerA.height(0);
+    innerB.height(0);
+    
+    var h = outerA.height();
+    var p = (parseInt(innerA.css('paddingTop'), 10) * 2)
+          + (parseInt(innerA.css('borderTopWidth'), 10) * 2);
+
+    innerA.height(h - p);
+    innerB.height(h - p);
+
+    scrollDown();
+}
+
+function scrollDown() {
+    var inner = $('#messages .ui-panel');
+    inner.scrollTop(inner.get(0).scrollHeight - inner.height());
 }
 
 $(document).ready(function() {
 
-  $("#entry").keypress(function (e) {
-    if (e.keyCode != 13 /* Return */) return;
-    var msg = $("#entry").attr("value").replace("\n", "");
-    if (!util.isBlank(msg)) send(msg);
-    $("#entry").attr("value", ""); // clear the entry field.
-  });
+    $('#input input').keypress(function(e){
+        if (e.keyCode == 13) {
+            var input = $('#input input');
+            var msg = $.trim(input.val());
+            if (msg) send(msg);
+            input.val('');
+        }
+    }).focus();
 
-  $("#usersLink").click(outputUsers);
+    $(window).resize(fixPanelHeight).trigger('resize');
 
-  $("#connectButton").click(function () {
-    showLoad();
-    var nick = $("#nickInput").attr("value");
-
-    if (nick.length > 50) {
-      alert("Nick too long. 50 character max.");
-      showConnect();
-      return false;
-    }
-
-    if (/[^\w_\-^!]/.exec(nick)) {
-      alert("Bad character in nick. Can only have letters, numbers, and '_', '-', '^', '!'");
-      showConnect();
-      return false;
-    }
-
-    $.ajax({ cache: false
-           , type: "GET" // XXX should be POST
-           , dataType: "json"
-           , url: "/join"
-           , data: { nick: nick }
-           , error: function () {
-               alert("error connecting to server");
-               showConnect();
-             }
-           , success: onConnect
-           });
-    return false;
-  });
-
-  // update the clock every second
-  setInterval(function () {
-    var now = new Date();
-    $("#currentTime").text(util.timeString(now));
-  }, 1000);
-
-  if (CONFIG.debug) {
-    $("#loading").hide();
-    $("#connect").hide();
-    scrollDown();
-    return;
-  }
-
-  // remove fixtures
-  $("#log table").remove();
-
-  longPoll();
-
-  showConnect();
+    connect();
+    who();
+    polling();
 });
 
-$(window).unload(function () {
-  jQuery.get("/part", {id: CONFIG.id}, function (data) { }, "json");
+$(window).unload(function() {
+    req('/part', { id:CONFIG.id });
 });
